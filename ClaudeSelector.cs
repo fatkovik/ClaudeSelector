@@ -74,6 +74,39 @@ namespace ClaudeSelector
             if (File.Exists(file)) File.Replace(temporary, file, file + ".bak");
             else File.Move(temporary, file);
         }
+        public static string[] RemovalDirectories(Account account, string dataDirectory, string roamingDirectory)
+        {
+            if (account.Id == "existing" || !Regex.IsMatch(account.Id, @"\A[A-Za-z0-9_-]{1,80}\z"))
+                throw new InvalidOperationException("The Default account uses shared Claude data, which cannot be deleted here.");
+            var expected = new[] { Path.Combine(dataDirectory, "accounts", account.Id), Path.Combine(roamingDirectory, "ClaudeSelector-" + account.Id) };
+            var actual = new[] { account.ConfigDirectory, account.DesktopDirectory };
+            for (int i = 0; i < expected.Length; i++)
+                if (String.IsNullOrWhiteSpace(actual[i]) || !String.Equals(Path.GetFullPath(actual[i]).TrimEnd('\\', '/'), Path.GetFullPath(expected[i]).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("This account uses custom profile locations. Remove its entry here and manage its data separately.");
+            return expected.Select(Path.GetFullPath).ToArray();
+        }
+        static void CheckRemovalTree(string path)
+        {
+            // Refuse junctions/symlinks, including in ancestors, before deleting anything.
+            for (var parent = new DirectoryInfo(path); parent != null; parent = parent.Parent)
+                if (parent.Exists && (parent.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException("Account data contains a linked directory. Manage its data separately.");
+            if (!Directory.Exists(path)) return;
+            foreach (string entry in Directory.GetFileSystemEntries(path))
+            {
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException("Account data contains a linked file or directory. Manage its data separately.");
+                if ((attributes & FileAttributes.Directory) != 0) CheckRemovalTree(entry);
+            }
+        }
+        public static void DeleteAccountData(Account account, string dataDirectory, string roamingDirectory)
+        {
+            var directories = RemovalDirectories(account, dataDirectory, roamingDirectory);
+            foreach (string directory in directories) CheckRemovalTree(directory);
+            try { foreach (string directory in directories) if (Directory.Exists(directory)) Directory.Delete(directory, true); }
+            catch (Exception ex) { throw new IOException("Could not delete all account data. The account entry was kept; some files may already have been deleted. " + ex.Message, ex); }
+        }
         public static string FindClaude()
         {
             return FindClaude(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), Environment.GetEnvironmentVariable("PATH"));
@@ -644,8 +677,40 @@ namespace ClaudeSelector
             if (selected == null) return;
             CheckActivity();
             if (activity.Problem != null || activity.AccountIds.Contains(selected.Id)) throw new Exception("Close this account's CLI windows and quit Desktop before removing it. " + activity.Problem);
-            if (MessageBox.Show(this, "Remove " + selected.Name + " from the launcher? Its Claude login and files will stay on disk.", "Remove account", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            settings.Accounts.Remove(selected); Reload(null); persist(settings, settingsFile);
+            var target = selected;
+            bool deleteData;
+            using (var dialog = new Form { Text = "Remove account", ClientSize = new Size(480, 270), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false, Font = Font, BackColor = Background, ForeColor = Ink, AutoScaleMode = AutoScaleMode.Dpi })
+            {
+                var content = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(24), ColumnCount = 1, RowCount = 4 };
+                content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+                content.RowStyles.Add(new RowStyle(SizeType.AutoSize)); content.RowStyles.Add(new RowStyle(SizeType.AutoSize)); content.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+                dialog.Controls.Add(content);
+                content.Controls.Add(new Label { Text = "Remove \"" + target.Name + "\" from the launcher?", AutoSize = true, MaximumSize = new Size(432, 0), UseMnemonic = false, Margin = new Padding(0, 0, 0, 16) });
+                var erase = new CheckBox { Text = "Also delete this account's local data", AutoSize = true, Margin = new Padding(0, 0, 0, 12) };
+                string explanation = "Deletes saved logins, settings and history in this account's CLI and Desktop profiles. This cannot be undone. Project files are kept.\r\n\r\nLeave unchecked to keep the data on this PC.";
+                try { Core.RemovalDirectories(target, Core.DataDirectory, Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)); }
+                catch (InvalidOperationException ex) { erase.Enabled = false; explanation = ex.Message + " Its data will stay on this PC."; }
+                content.Controls.Add(erase);
+                content.Controls.Add(new Label { Text = explanation, AutoSize = true, MaximumSize = new Size(432, 0), ForeColor = Muted, Margin = Padding.Empty });
+                var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Margin = Padding.Empty };
+                var confirm = Button("Remove", delegate { }); confirm.DialogResult = DialogResult.OK; confirm.Margin = Padding.Empty; StylePrimary(confirm);
+                var cancel = Button("Cancel", delegate { }); cancel.DialogResult = DialogResult.Cancel;
+                buttons.Controls.Add(confirm); buttons.Controls.Add(cancel); content.Controls.Add(buttons);
+                dialog.AcceptButton = cancel; dialog.CancelButton = cancel; dialog.Shown += delegate { cancel.Focus(); };
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                deleteData = erase.Checked;
+            }
+            using (var gate = new LaunchGate("Launch"))
+            {
+                CheckActivity();
+                if (activity.Problem != null || activity.AccountIds.Contains(target.Id)) throw new Exception("Close this account's CLI windows and quit Desktop before removing it. " + activity.Problem);
+                if (deleteData) Core.DeleteAccountData(target, Core.DataDirectory, Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+                var remaining = new Settings { Accounts = settings.Accounts.Where(a => a != target).ToList(), Mode = settings.Mode };
+                remaining.SelectedId = remaining.Accounts.Select(a => a.Id).FirstOrDefault();
+                persist(remaining, settingsFile);
+                settings.Accounts = remaining.Accounts; Reload(remaining.SelectedId);
+                feedback.Text = deleteData ? "Account removed and its local CLI and Desktop data deleted." : "Account removed. Its local data was kept on this PC.";
+            }
         }
         void Browse() { using (var picker = new FolderBrowserDialog { Description = "Choose the project folder for Claude Code", SelectedPath = folder.Text, ShowNewFolderButton = true }) if (picker.ShowDialog(this) == DialogResult.OK) folder.Text = picker.SelectedPath; }
         void SaveBrowserChoice()

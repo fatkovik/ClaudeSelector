@@ -72,7 +72,7 @@ Preferences: `%LOCALAPPDATA%\ClaudeSelector\settings.json` (previous save in `.b
 
 For added accounts, the child shell clears inherited API keys, OAuth token overrides, base URL, Anthropic profile, and cloud-provider selection variables so subscription login can be used. The current CLI account preserves these variables for existing workplace configurations. This launcher targets Claude subscription accounts; added profiles do not automatically copy corporate gateway or user settings. Configure those with your organization if needed.
 
-Removing an account only removes its launcher entry; it neither deletes CLI/Desktop profile files nor revokes credentials. To sign out, run `/logout` in that account's CLI session and use Desktop's sign-out action before closing the sessions and removing the entry.
+Click **Remove** to open a confirmation dialog for the selected account. **Cancel** keeps the account unchanged. By default, removal keeps its local data. Check **Also delete this account's local data** to permanently delete its separate CLI and Desktop profiles, including saved logins, settings and history. This does not revoke server-side credentials. The shared Default profile and custom profile locations cannot be deleted here; the dialog explains when the checkbox is unavailable. Active accounts must be closed before removal. Project folders outside the account profiles are kept.
 
 ## Privacy and local data
 
@@ -80,7 +80,7 @@ Claude Selector does not collect or send your account details, login links, cred
 
 The selector does not read or copy Claude credential files. Claude stores its own sign-in data in the local profile used by that account, much like Claude normally stores accounts on this PC. The selector's own preferences contain account labels and IDs, profile/configuration paths, browser choices, and working folders, but not passwords, tokens, or pasted login URLs. A temporary Desktop sign-in record contains only the selected account/profile, an expiry, and a random intent ID. See **Account storage** and **Desktop SSO / browser sign-in** above for the exact locations and behavior.
 
-Local storage is not encryption or a separate Windows security boundary: the files are subject to Windows permissions and may be accessible to other programs running as your Windows user or to administrators. Removing an account from the selector does not erase its local Claude profiles or sign it out; use Claude's sign-out controls to remove saved logins.
+Local storage is not encryption or a separate Windows security boundary: the files are subject to Windows permissions and may be accessible to other programs running as your Windows user or to administrators. Removing an account keeps its local Claude profiles unless you select the data-deletion checkbox. Use Claude's sign-out controls to sign out before removal if needed.
 
 ## Build and verify
 

@@ -220,6 +220,53 @@ public static class Tests
             Check(!SessionGuard.Analyze(state, SessionGuard.Snapshot()).AccountIds.Contains(account.Id), "Real process exit releases the CLI account lock");
         }
         Application.EnableVisualStyles();
+        string removalRoot = Path.Combine(root, "removal");
+        string removalRoaming = Path.Combine(removalRoot, "roaming");
+        var removable = new Account { Id = "remove-test", Name = "Remove test", ConfigDirectory = Path.Combine(removalRoot, "accounts", "remove-test"), DesktopDirectory = Path.Combine(removalRoaming, "ClaudeSelector-remove-test"), Folder = folder };
+        foreach (string directory in Core.RemovalDirectories(removable, removalRoot, removalRoaming)) { Directory.CreateDirectory(directory); File.WriteAllText(Path.Combine(directory, "sample.txt"), "test data"); }
+        Reject(delegate { Core.DeleteAccountData(new Account { Id = "existing" }, removalRoot, removalRoaming); }, "Default shared data cannot be deleted");
+        Reject(delegate { Core.DeleteAccountData(new Account { Id = "remove-test", ConfigDirectory = folder, DesktopDirectory = removable.DesktopDirectory }, removalRoot, removalRoaming); }, "Custom paths cannot be deleted");
+        Check(Directory.Exists(removable.DesktopDirectory), "Deletion validates all paths before changing files");
+        Core.DeleteAccountData(removable, removalRoot, removalRoaming);
+        Check(!Directory.Exists(removable.ConfigDirectory) && !Directory.Exists(removable.DesktopDirectory) && Directory.Exists(folder), "Deletion removes both profiles and keeps the project folder");
+        Core.DeleteAccountData(removable, removalRoot, removalRoaming);
+        Check(true, "Deletion tolerates already missing profile folders");
+        removable.ConfigDirectory = Path.Combine(Core.DataDirectory, "accounts", removable.Id);
+        removable.DesktopDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "ClaudeSelector-" + removable.Id);
+        var removalState = new Settings { Accounts = new List<Account> { removable }, SelectedId = removable.Id };
+        int removalSaves = 0;
+        using (var form = new MainForm(removalState, null, settingsFile, delegate { return new List<ProcessEntry>(); }, delegate { removalSaves++; }, delegate { return true; }, delegate { return fake; }))
+        {
+            form.Opacity = 0; form.ShowInTaskbar = false; form.Show(); Pump();
+            int beforeRemoval = removalSaves;
+            bool dialogChecked = false;
+            using (var timer = new Timer { Interval = 100 })
+            {
+                timer.Tick += delegate {
+                    var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.Text == "Remove account");
+                    if (dialog == null) return;
+                    timer.Stop();
+                    var controls = Descendants(dialog).ToList();
+                    var checkbox = controls.OfType<CheckBox>().Single();
+                    dialogChecked = checkbox.Enabled && !checkbox.Checked && controls.OfType<Label>().Any(l => l.Text.Contains(removable.Name));
+                    Draw(dialog, Path.Combine(root, "remove-account-preview.png"));
+                    dialog.DialogResult = DialogResult.Cancel;
+                };
+                timer.Start(); Descendants(form).OfType<Button>().Single(b => b.Text == "Remove").PerformClick();
+            }
+            Check(dialogChecked && removalState.Accounts.Count == 1 && removalSaves == beforeRemoval, "Removal dialog names the account, defaults to keeping data, and Cancel leaves settings unchanged");
+            using (var timer = new Timer { Interval = 100 })
+            {
+                timer.Tick += delegate {
+                    var dialog = Application.OpenForms.Cast<Form>().FirstOrDefault(f => f.Text == "Remove account");
+                    if (dialog == null) return;
+                    timer.Stop(); dialog.DialogResult = DialogResult.OK;
+                };
+                timer.Start(); Descendants(form).OfType<Button>().Single(b => b.Text == "Remove").PerformClick();
+            }
+            Check(removalState.Accounts.Count == 0 && removalSaves == beforeRemoval + 1, "Confirming removal persists an empty account list and clears the selection");
+            form.Close();
+        }
         using (var form = new MainForm(defaultState, null, defaultSettingsFile, delegate { return new List<ProcessEntry> { nativeDesktop }; }, delegate { }, delegate { return true; }, delegate { return fake; }))
         {
             form.Opacity = 0; form.ShowInTaskbar = false; form.Show(); Pump();
